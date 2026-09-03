@@ -1,38 +1,66 @@
-import 'server-only';
-import { importX509, jwtVerify, decodeProtectedHeader, type JWTPayload } from 'jose';
-import { NextResponse } from 'next/server';
+import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 
 /**
- * Verifies Firebase ID tokens on the server without the firebase-admin SDK.
- * Firebase signs ID tokens with rotating Google keys published as X.509 certs;
- * we fetch + cache those and check the standard issuer/audience claims.
+ * Simple single-account admin auth: one username + password held in env vars.
+ * A successful login gets a signed, http-only session cookie (HS256 via jose,
+ * so it also verifies inside Edge middleware).
  */
 
-const CERT_URL =
-  'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com';
+export const ADMIN_COOKIE = 'cfp_admin';
+const SESSION_DAYS = 7;
 
-let certCache: { keys: Record<string, string>; expiresAt: number } | null = null;
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || '';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || '';
 
-async function getGoogleCerts(): Promise<Record<string, string>> {
-  if (certCache && certCache.expiresAt > Date.now()) return certCache.keys;
+export const isAdminAuthConfigured = Boolean(ADMIN_USERNAME && ADMIN_PASSWORD && SESSION_SECRET);
 
-  const res = await fetch(CERT_URL, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`Failed to fetch Google certs: ${res.status}`);
-  const keys = (await res.json()) as Record<string, string>;
-
-  const cacheControl = res.headers.get('cache-control') || '';
-  const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
-  const maxAgeSeconds = maxAgeMatch ? parseInt(maxAgeMatch[1], 10) : 3600;
-
-  certCache = { keys, expiresAt: Date.now() + maxAgeSeconds * 1000 };
-  return keys;
+function secretKey(): Uint8Array {
+  return new TextEncoder().encode(SESSION_SECRET);
 }
 
-export interface AdminIdentity {
-  uid: string;
-  email: string;
-  emailVerified: boolean;
+/** Constant-time-ish string compare (avoids early-exit timing leaks). */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
+
+export function checkCredentials(username: string, password: string): boolean {
+  if (!isAdminAuthConfigured) return false;
+  return safeEqual(username, ADMIN_USERNAME) && safeEqual(password, ADMIN_PASSWORD);
+}
+
+export async function createSessionToken(): Promise<string> {
+  return new SignJWT({ role: 'admin', sub: ADMIN_USERNAME })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime(`${SESSION_DAYS}d`)
+    .sign(secretKey());
+}
+
+export async function verifySessionToken(token: string | undefined | null): Promise<JWTPayload | null> {
+  if (!token || !SESSION_SECRET) return null;
+  try {
+    const { payload } = await jwtVerify(token, secretKey());
+    return payload.role === 'admin' ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+export const sessionCookieOptions = {
+  httpOnly: true,
+  sameSite: 'lax' as const,
+  secure: process.env.NODE_ENV === 'production',
+  path: '/',
+  maxAge: SESSION_DAYS * 24 * 60 * 60,
+};
+
+// ---------------------------------------------------------------------------
+// Route guard
+// ---------------------------------------------------------------------------
 
 export class AdminAuthError extends Error {
   status: number;
@@ -42,91 +70,37 @@ export class AdminAuthError extends Error {
   }
 }
 
-function getProjectId(): string {
-  const id = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID;
-  if (!id) throw new AdminAuthError(500, 'Server auth is not configured (missing Firebase project id).');
-  return id;
-}
-
-function getAllowedEmails(): string[] {
-  return (process.env.ADMIN_EMAILS || '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-async function verifyFirebaseIdToken(token: string): Promise<JWTPayload> {
-  const projectId = getProjectId();
-
-  let kid: string | undefined;
-  try {
-    ({ kid } = decodeProtectedHeader(token));
-  } catch {
-    throw new AdminAuthError(401, 'Malformed authentication token.');
+function readCookie(req: Request, name: string): string | undefined {
+  const header = req.headers.get('cookie') || '';
+  for (const part of header.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) return decodeURIComponent(v.join('='));
   }
-  if (!kid) throw new AdminAuthError(401, 'Authentication token missing key id.');
-
-  const certs = await getGoogleCerts();
-  const pem = certs[kid];
-  if (!pem) throw new AdminAuthError(401, 'Authentication token signed with an unknown key.');
-
-  const key = await importX509(pem, 'RS256');
-
-  try {
-    const { payload } = await jwtVerify(token, key, {
-      issuer: `https://securetoken.google.com/${projectId}`,
-      audience: projectId,
-    });
-    if (!payload.sub) throw new Error('missing sub');
-    if (typeof payload.auth_time === 'number' && payload.auth_time * 1000 > Date.now() + 60_000) {
-      throw new Error('auth_time in the future');
-    }
-    return payload;
-  } catch {
-    throw new AdminAuthError(401, 'Invalid or expired authentication token.');
-  }
+  return undefined;
 }
 
-/**
- * Authorise an admin API request. Throws AdminAuthError on any failure.
- * Pass the incoming Request (or a Headers object).
- */
-export async function requireAdmin(req: Request | { headers: Headers }): Promise<AdminIdentity> {
-  const header = req.headers.get('authorization') || req.headers.get('Authorization') || '';
-  const token = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
-  if (!token) throw new AdminAuthError(401, 'Missing authentication token.');
-
-  const payload = await verifyFirebaseIdToken(token);
-  const email = String(payload.email || '').toLowerCase();
-  const emailVerified = payload.email_verified === true;
-
-  if (!email) throw new AdminAuthError(403, 'This account has no email address.');
-  if (!emailVerified) throw new AdminAuthError(403, 'Please verify your email address first.');
-
-  const allowed = getAllowedEmails();
-  if (allowed.length === 0) {
+/** Throws AdminAuthError when the request has no valid admin session. */
+export async function requireAdmin(req: Request): Promise<void> {
+  if (!isAdminAuthConfigured) {
     throw new AdminAuthError(
-      403,
-      'No admin accounts are configured. Set the ADMIN_EMAILS environment variable.'
+      500,
+      'Admin auth is not configured. Set ADMIN_USERNAME, ADMIN_PASSWORD and ADMIN_SESSION_SECRET.'
     );
   }
-  if (!allowed.includes(email)) {
-    throw new AdminAuthError(403, 'This account is not an authorised admin.');
-  }
-
-  return { uid: String(payload.sub), email, emailVerified };
+  const payload = await verifySessionToken(readCookie(req, ADMIN_COOKIE));
+  if (!payload) throw new AdminAuthError(401, 'Not signed in.');
 }
 
-/** Convenience wrapper: returns an error NextResponse, or null when authorised. */
+/** Returns an error Response, or null when authorised. */
 export async function guardAdminRoute(
   req: Request
-): Promise<{ identity: AdminIdentity; error: null } | { identity: null; error: NextResponse }> {
+): Promise<Response | null> {
   try {
-    const identity = await requireAdmin(req);
-    return { identity, error: null };
+    await requireAdmin(req);
+    return null;
   } catch (err) {
     const status = err instanceof AdminAuthError ? err.status : 500;
     const message = err instanceof Error ? err.message : 'Authorization failed.';
-    return { identity: null, error: NextResponse.json({ error: message }, { status }) };
+    return Response.json({ error: message }, { status });
   }
 }

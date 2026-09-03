@@ -26,8 +26,8 @@ function slugify(value: string): string {
 
 // POST /api/admin/upload — multipart form: `file` (required), `name` (optional label)
 export async function POST(req: Request) {
-  const { error } = await guardAdminRoute(req);
-  if (error) return error;
+  const denied = await guardAdminRoute(req);
+  if (denied) return denied;
 
   const supabase = getSupabaseAdmin();
   if (!supabase) {

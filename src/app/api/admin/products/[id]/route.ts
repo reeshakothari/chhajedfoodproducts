@@ -19,8 +19,8 @@ function parseId(raw: string): number | null {
 
 // PATCH /api/admin/products/:id — update any subset of fields
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  const { error } = await guardAdminRoute(req);
-  if (error) return error;
+  const denied = await guardAdminRoute(req);
+  if (denied) return denied;
 
   const id = parseId(params.id);
   if (id === null) return NextResponse.json({ error: 'Invalid product id.' }, { status: 400 });
@@ -62,8 +62,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
 // DELETE /api/admin/products/:id
 export async function DELETE(req: Request, { params }: { params: { id: string } }) {
-  const { error } = await guardAdminRoute(req);
-  if (error) return error;
+  const denied = await guardAdminRoute(req);
+  if (denied) return denied;
 
   const id = parseId(params.id);
   if (id === null) return NextResponse.json({ error: 'Invalid product id.' }, { status: 400 });

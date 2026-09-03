@@ -4,16 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  getFirebaseAuth,
-  isFirebaseConfigured,
-  onAuthStateChanged,
-  signOut,
-  type User,
-} from '@/lib/firebase';
-import {
   createProduct,
   deleteProduct,
   fetchAdminProducts,
+  logout,
   updateProduct,
 } from '@/lib/adminClient';
 import type { AdminProduct, ProductInput } from '@/lib/supabase';
@@ -24,8 +18,6 @@ const inr = (n: number) =>
 
 export default function AdminDashboard() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
 
   const [products, setProducts] = useState<AdminProduct[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,20 +28,6 @@ export default function AdminDashboard() {
   const [editing, setEditing] = useState<AdminProduct | null>(null);
   const [rowBusy, setRowBusy] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-
-  // ---- auth gate -----------------------------------------------------------
-  useEffect(() => {
-    const auth = getFirebaseAuth();
-    if (!auth) {
-      setAuthReady(true);
-      return;
-    }
-    return onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setAuthReady(true);
-      if (!u) router.replace('/admin/login');
-    });
-  }, [router]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,8 +42,14 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
-    if (user) load();
-  }, [user, load]);
+    load();
+  }, [load]);
+
+  async function handleSignOut() {
+    await logout();
+    router.replace('/admin/login');
+    router.refresh();
+  }
 
   const flash = (msg: string) => {
     setToast(msg);
@@ -131,50 +115,15 @@ export default function AdminDashboard() {
   }, [products, query, category]);
 
   // ---- render ----------------------------------------------------------
-  if (!isFirebaseConfigured) {
-    return (
-      <Shell>
-        <div className="max-w-lg mx-auto mt-20 bg-card border border-border rounded-2xl p-8 text-center">
-          <h1 className="font-headline text-xl font-bold text-foreground mb-2">Setup required</h1>
-          <p className="font-body text-sm text-muted-foreground">
-            Firebase Auth is not configured. Add the <code>NEXT_PUBLIC_FIREBASE_*</code> environment
-            variables in Vercel and redeploy to enable the admin console.
-          </p>
-        </div>
-      </Shell>
-    );
-  }
-
-  if (!authReady) {
-    return (
-      <Shell>
-        <p className="text-center text-sm font-body text-muted-foreground mt-24">Loading…</p>
-      </Shell>
-    );
-  }
-
-  if (!user) {
-    return (
-      <Shell>
-        <p className="text-center text-sm font-body text-muted-foreground mt-24">
-          Redirecting to sign in…
-        </p>
-      </Shell>
-    );
-  }
-
   return (
     <Shell
       right={
-        <div className="flex items-center gap-3">
-          <span className="hidden sm:block text-xs font-body text-muted-foreground">{user.email}</span>
-          <button
-            onClick={() => signOut()}
-            className="px-3 py-1.5 rounded-lg border border-border text-xs font-cta text-foreground hover:bg-muted"
-          >
-            Sign out
-          </button>
-        </div>
+        <button
+          onClick={handleSignOut}
+          className="px-3 py-1.5 rounded-lg border border-border text-xs font-cta text-foreground hover:bg-muted"
+        >
+          Sign out
+        </button>
       }
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-5">

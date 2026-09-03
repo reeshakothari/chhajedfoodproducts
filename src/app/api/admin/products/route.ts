@@ -15,8 +15,8 @@ const REQUIRED_FIELDS: (keyof ProductInput)[] = ['name', 'category', 'brand'];
 
 // GET /api/admin/products — full list including out-of-stock items
 export async function GET(req: Request) {
-  const { error } = await guardAdminRoute(req);
-  if (error) return error;
+  const denied = await guardAdminRoute(req);
+  if (denied) return denied;
 
   const supabase = getSupabaseAdmin();
   if (!supabase) {
@@ -41,8 +41,8 @@ export async function GET(req: Request) {
 
 // POST /api/admin/products — create a product
 export async function POST(req: Request) {
-  const { error } = await guardAdminRoute(req);
-  if (error) return error;
+  const denied = await guardAdminRoute(req);
+  if (denied) return denied;
 
   const supabase = getSupabaseAdmin();
   if (!supabase) {
