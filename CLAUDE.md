@@ -88,7 +88,17 @@ The root `/` redirects to `/homepage` (configured in `next.config.mjs`):
 
 ### Product Data Structure
 
-Products are defined in `src/data/products.ts` with the following schema:
+Products are stored in the Supabase table `cfp_products` (project `500Kcal`) and
+managed through the `/admin` console. `src/data/products.ts` remains the type
+source and an offline fallback used when Supabase is not configured. See
+`ADMIN_SETUP.md` for the full setup (Firebase Auth + env vars).
+
+- Storefront reads: `getProducts()` in `src/lib/supabase.ts` (Supabase, falls back to the static list).
+- `src/app/product-catalog/page.tsx` is `dynamic = 'force-dynamic'` so edits appear immediately.
+- Admin writes go through `src/app/api/admin/**`, which verify a Firebase ID token
+  against the `ADMIN_EMAILS` allowlist before using the Supabase service role.
+
+The `Product` schema (in `src/data/products.ts`):
 
 ```typescript
 interface Product {

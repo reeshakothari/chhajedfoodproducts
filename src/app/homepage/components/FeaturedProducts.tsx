@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import AppImage from '@/components/ui/AppImage';
 import Icon from '@/components/ui/AppIcon';
@@ -22,28 +22,34 @@ interface Product {
   weight: string;
 }
 
-// Select featured products and adapt them to the component interface
-const mockProducts: Product[] = realProducts
-  .filter(p => p.featured)
-  .slice(0, 12)
-  .map(p => ({
-    id: p.id,
-    name: p.name,
-    brand: p.brand,
-    category: p.category,
-    description: p.description,
-    image: p.image,
-    alt: p.alt,
-    features: [
-      `${p.weight} pack`,
-      'Premium quality',
-      p.dietary[0] || 'Quality ingredients'
-    ],
-    preparationTime: p.prepTime,
-    dietary: p.dietary,
-    price: p.sellingPrice,
-    weight: p.weight
-  }));
+type CatalogProduct = typeof realProducts[number];
+
+// Adapt catalog products to this component's card interface
+function adaptFeatured(list: CatalogProduct[]): Product[] {
+  return list
+    .filter(p => p.featured)
+    .slice(0, 12)
+    .map(p => ({
+      id: p.id,
+      name: p.name,
+      brand: p.brand,
+      category: p.category,
+      description: p.description,
+      image: p.image,
+      alt: p.alt,
+      features: [
+        `${p.weight} pack`,
+        'Premium quality',
+        p.dietary[0] || 'Quality ingredients'
+      ],
+      preparationTime: p.prepTime,
+      dietary: p.dietary,
+      price: p.sellingPrice,
+      weight: p.weight
+    }));
+}
+
+const staticFeatured: Product[] = adaptFeatured(realProducts);
 
 const categories = ['All Products', 'Dips & Spreads', 'Syrups', 'Chatni', 'Fragrances'];
 
@@ -51,7 +57,21 @@ export default function FeaturedProducts() {
   const [selectedCategory, setSelectedCategory] = useState('All Products');
   const [hoveredProduct, setHoveredProduct] = useState<number | null>(null);
   const [addedToCart, setAddedToCart] = useState<number | null>(null);
+  const [mockProducts, setMockProducts] = useState<Product[]>(staticFeatured);
   const { addToCart } = useCart();
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/products', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (active && data?.products?.length) setMockProducts(adaptFeatured(data.products));
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleAddToCart = (product: Product) => {
     addToCart({
