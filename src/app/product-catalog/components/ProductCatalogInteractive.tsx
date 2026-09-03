@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Icon from '@/components/ui/AppIcon';
 import ProductCard from './ProductCard';
 import FilterSidebar from './FilterSidebar';
@@ -67,14 +67,18 @@ interface ActiveFilters {
   inStockOnly: boolean;
 }
 
-const allProducts: Product[] = realProducts;
-const allProductGroups = groupProductsByNameAndBrand(allProducts);
+interface ProductCatalogInteractiveProps {
+  initialProducts?: Product[];
+}
 
+export default function ProductCatalogInteractive({ initialProducts }: ProductCatalogInteractiveProps) {
+  const sourceProducts: Product[] =
+    initialProducts && initialProducts.length > 0 ? initialProducts : realProducts;
+  const initialGroups = useMemo(() => groupProductsByNameAndBrand(sourceProducts), [sourceProducts]);
 
-export default function ProductCatalogInteractive() {
   const [isHydrated, setIsHydrated] = useState(false);
-  const [productGroups] = useState<ProductGroup[]>(allProductGroups);
-  const [filteredGroups, setFilteredGroups] = useState<ProductGroup[]>(allProductGroups);
+  const [productGroups] = useState<ProductGroup[]>(initialGroups);
+  const [filteredGroups, setFilteredGroups] = useState<ProductGroup[]>(initialGroups);
   const [sortBy, setSortBy] = useState('featured');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showFilters, setShowFilters] = useState(false);
@@ -193,7 +197,7 @@ export default function ProductCatalogInteractive() {
   };
 
   const handleAddToComparison = (productId: number) => {
-    const product = allProducts.find((p) => p.id === productId);
+    const product = sourceProducts.find((p) => p.id === productId);
     if (product && comparisonProducts.length < 4 && !comparisonProducts.find((p) => p.id === productId)) {
       setComparisonProducts((prev) => [...prev, product]);
     }
@@ -204,14 +208,14 @@ export default function ProductCatalogInteractive() {
   };
 
   const handleSampleRequest = (productId: number) => {
-    const product = allProducts.find((p) => p.id === productId);
+    const product = sourceProducts.find((p) => p.id === productId);
     if (product) {
       setSampleRequestProduct(product.name);
     }
   };
 
   const handleBulkInquiry = (productId: number) => {
-    const product = allProducts.find((p) => p.id === productId);
+    const product = sourceProducts.find((p) => p.id === productId);
     if (product) {
       setBulkInquiryProduct(product.name);
     }
